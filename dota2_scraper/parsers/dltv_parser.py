@@ -252,15 +252,8 @@ class DltvParser:
             except (TypeError, ValueError):
                 pass
 
-        first_wins = 0
-        second_wins = 0
-        for bet in series.get("bets") or []:
-            if not isinstance(bet, dict):
-                continue
-            if bet.get("map") and int(bet.get("map", 0)) > 0:
-                continue
-            # No reliable score in bets; keep fallback to None
-        return (first_wins or None, second_wins or None)
+        # Bets do not contain a reliable per-series score; fall back to unknown.
+        return (None, None)
 
     @staticmethod
     def _series_format_from_text(text: str) -> str | None:

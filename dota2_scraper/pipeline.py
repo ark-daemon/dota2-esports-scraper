@@ -43,6 +43,8 @@ class PipelineState:
     fetched: int = 0
     stored: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _inflight_fetch: int = 0
+    _inflight_parse: int = 0
 
     async def can_schedule(self, url: str) -> bool:
         async with self.lock:
@@ -69,10 +71,28 @@ class PipelineState:
             for table, count in counts.items():
                 self.stored[table] += count
 
+    async def enter_fetch(self) -> None:
+        async with self.lock:
+            self._inflight_fetch += 1
+
+    async def exit_fetch(self) -> None:
+        async with self.lock:
+            self._inflight_fetch -= 1
+
+    async def enter_parse(self) -> None:
+        async with self.lock:
+            self._inflight_parse += 1
+
+    async def exit_parse(self) -> None:
+        async with self.lock:
+            self._inflight_parse -= 1
+
     async def is_idle(self, fetch_queue: asyncio.Queue[Any], parse_queue: asyncio.Queue[Any]) -> bool:
         async with self.lock:
             return (
-                self.completed >= self.scheduled
+                self._inflight_fetch == 0
+                and self._inflight_parse == 0
+                and self.completed >= self.scheduled
                 and fetch_queue.empty()
                 and parse_queue.empty()
             )
@@ -426,6 +446,7 @@ class ScrapePipeline:
                 try:
                     if job is None:
                         return
+                    await state.enter_fetch()
                     try:
                         page = await fetcher.fetch(job)
                         await state.mark_fetched()
@@ -434,6 +455,8 @@ class ScrapePipeline:
                         logger.warning("{} fetch failed for {}: {}", source.value, job.url, exc)
                         await state.mark_completed()
                         progress.update(1)
+                    finally:
+                        await state.exit_fetch()
                 finally:
                     fetch_queue.task_done()
 
@@ -443,20 +466,24 @@ class ScrapePipeline:
                 try:
                     if page is None:
                         return
-                    payload = parser.parse(page)
-                    counts = await self.database.insert_payload(payload.rows)
-                    await state.add_stored(counts)
-                    for discovered in payload.discovered_jobs:
-                        if discovered.source != source:
-                            continue
-                        if await state.mark_scheduled(discovered.url):
-                            await fetch_queue.put(discovered)
-                    await state.mark_completed()
-                    progress.update(1)
-                except Exception as exc:
-                    logger.exception("{} parse/store failed: {}", source.value, exc)
-                    await state.mark_completed()
-                    progress.update(1)
+                    await state.enter_parse()
+                    try:
+                        payload = parser.parse(page)
+                        counts = await self.database.insert_payload(payload.rows)
+                        await state.add_stored(counts)
+                        for discovered in payload.discovered_jobs:
+                            if discovered.source != source:
+                                continue
+                            if await state.mark_scheduled(discovered.url):
+                                await fetch_queue.put(discovered)
+                        await state.mark_completed()
+                        progress.update(1)
+                    except Exception as exc:
+                        logger.exception("{} parse/store failed: {}", source.value, exc)
+                        await state.mark_completed()
+                        progress.update(1)
+                    finally:
+                        await state.exit_parse()
                 finally:
                     parse_queue.task_done()
 

@@ -606,11 +606,12 @@ class DotabuffParser:
             if not m:
                 return None
             raw = m.group(1)
-            if len(raw) >= 2:
-                candidate = int(raw[0])
-                remainder = int(raw[1:])
-                if 0 <= remainder <= 99:  # looks like minutes (0-99)
-                    return candidate
+            # Heuristic: if the captured digits are immediately followed by a time
+            # pattern (e.g. "49:43"), the first digit is the game number and the
+            # rest is minutes. Otherwise trust the full number as the game number.
+            after = raw_text[m.end() : m.end() + 6]
+            if len(raw) >= 2 and re.search(r"^\d{1,2}:\d{2}", after):
+                return int(raw[0])
             return int(raw)
 
         for sel in (".match-series-header", "[class*=series-header]"):
@@ -629,7 +630,7 @@ class DotabuffParser:
     @staticmethod
     def _items_from_row(row: Node, class_token: str) -> list[str]:
         items: list[str] = []
-        for image in row.css(f"[class*={class_token}] img[alt], img[alt]"):
+        for image in row.css(f"[class*={class_token}] img[alt]"):
             alt = clean_text(image.attributes.get("alt"))
             if alt and alt not in items:
                 items.append(alt)
