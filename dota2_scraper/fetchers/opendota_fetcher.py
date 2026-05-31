@@ -106,7 +106,7 @@ class OpenDotaFetcher:
         params: dict[str, Any] = {}
         if less_than_match_id is not None:
             params["less_than_match_id"] = less_than_match_id
-        payload = await self._request_json("/proMatches", params=params or None)
+        payload = await self._request_json("/proMatches", params=params if params else None)
         return payload if isinstance(payload, list) else []
 
     async def get_match_details(self, match_id: int) -> dict[str, Any]:

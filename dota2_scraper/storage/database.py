@@ -935,38 +935,39 @@ class Database:
                 return exact
             return cross_source_maps[table_name].get(name.lower())
 
+        def fill(row: dict, key: str, value: Any) -> None:
+            if row.get(key) is None and value is not None:
+                row[key] = value
+
         for row in rows:
             source = row.get("source")
-            def fill(key: str, value: Any) -> None:
-                if row.get(key) is None and value is not None:
-                    row[key] = value
 
             if table == "matches":
-                fill("team_a_id", _resolve_id("teams", source, row.get("team_a_name")))
-                fill("team_b_id", _resolve_id("teams", source, row.get("team_b_name")))
-                fill("tournament_id", _resolve_id("tournaments", source, row.get("tournament_name")))
+                fill(row, "team_a_id", _resolve_id("teams", source, row.get("team_a_name")))
+                fill(row, "team_b_id", _resolve_id("teams", source, row.get("team_b_name")))
+                fill(row, "tournament_id", _resolve_id("tournaments", source, row.get("tournament_name")))
             elif table == "games":
                 game_source_id = row.get("_match_source_id") or row.get("source_id")
-                fill("match_id", source_id_maps["matches"].get((source, game_source_id)))
-                fill("radiant_team_id", _resolve_id("teams", source, row.get("radiant_team_name")))
-                fill("dire_team_id", _resolve_id("teams", source, row.get("dire_team_name")))
+                fill(row, "match_id", source_id_maps["matches"].get((source, game_source_id)))
+                fill(row, "radiant_team_id", _resolve_id("teams", source, row.get("radiant_team_name")))
+                fill(row, "dire_team_id", _resolve_id("teams", source, row.get("dire_team_name")))
             elif table == "drafts":
-                fill("game_id", source_id_maps["games"].get((source, row.get("_game_source_id") or row.get("source_id"))))
-                fill("first_pick_team_id", _resolve_id("teams", source, row.get("first_pick_team_name")))
+                fill(row, "game_id", source_id_maps["games"].get((source, row.get("_game_source_id") or row.get("source_id"))))
+                fill(row, "first_pick_team_id", _resolve_id("teams", source, row.get("first_pick_team_name")))
             elif table == "draft_picks":
-                fill("game_id", source_id_maps["games"].get((source, row.get("_game_source_id"))))
-                fill("draft_id", source_id_maps["drafts"].get((source, row.get("_draft_source_id"))))
-                fill("team_id", _resolve_id("teams", source, row.get("team_name")))
+                fill(row, "game_id", source_id_maps["games"].get((source, row.get("_game_source_id"))))
+                fill(row, "draft_id", source_id_maps["drafts"].get((source, row.get("_draft_source_id"))))
+                fill(row, "team_id", _resolve_id("teams", source, row.get("team_name")))
             elif table == "player_game_stats":
-                fill("game_id", source_id_maps["games"].get((source, row.get("_game_source_id"))))
-                fill("team_id", _resolve_id("teams", source, row.get("team_name")))
-                fill("player_id", _resolve_id("players", source, row.get("player_ign")))
+                fill(row, "game_id", source_id_maps["games"].get((source, row.get("_game_source_id"))))
+                fill(row, "team_id", _resolve_id("teams", source, row.get("team_name")))
+                fill(row, "player_id", _resolve_id("players", source, row.get("player_ign")))
             elif table == "game_timelines":
-                fill("game_id", source_id_maps["games"].get((source, row.get("_game_source_id"))))
+                fill(row, "game_id", source_id_maps["games"].get((source, row.get("_game_source_id"))))
             elif table in {"rosters", "standins", "staff"}:
-                fill("team_id", _resolve_id("teams", source, row.get("team_name")))
+                fill(row, "team_id", _resolve_id("teams", source, row.get("team_name")))
                 if table in {"rosters", "standins"}:
-                    fill("player_id", _resolve_id("players", source, row.get("player_ign")))
+                    fill(row, "player_id", _resolve_id("players", source, row.get("player_ign")))
                 if table == "standins":
                     fill("tournament_id", _resolve_id("tournaments", source, row.get("tournament_name")))
             elif table == "earnings":

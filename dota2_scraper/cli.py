@@ -88,7 +88,7 @@ def scrape_all(
     ] = None,
     max_pages: Annotated[int | None, typer.Option(help="Maximum pages per source for this run.")] = None,
 ) -> None:
-    """Scrape all configured sources concurrently."""
+    """Scrape Dotabuff and Liquipedia concurrently."""
     settings = _settings(max_pages)
     configure_logging(settings.log_dir)
     pipeline = ScrapePipeline(settings, _database(settings))

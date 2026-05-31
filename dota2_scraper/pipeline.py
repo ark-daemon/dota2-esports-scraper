@@ -453,6 +453,7 @@ class ScrapePipeline:
                         await parse_queue.put(page)
                     except Exception as exc:
                         logger.warning("{} fetch failed for {}: {}", source.value, job.url, exc)
+                        await state.mark_fetched()
                         await state.mark_completed()
                         progress.update(1)
                     finally:
