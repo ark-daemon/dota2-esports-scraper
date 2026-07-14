@@ -4,57 +4,22 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-beta-orange.svg)](CHANGELOG.md)
 
-Async multi-source pipeline for **Dota 2 esports data** - Liquipedia + OpenDota API + DLTV over httpx, Dotabuff via CloakBrowser - staged in SQLite and exported to Parquet.
+> Async multi-source pipeline for Dota 2 esports -- Liquipedia + OpenDota API + DLTV over httpx, Dotabuff via CloakBrowser -- staged in SQLite, Parquet export, and fleet match snapshots.
 
-**Fleet:** [vlr-scraper](https://github.com/ark-daemon/vlr-scraper) | [hltv-scraper](https://github.com/ark-daemon/hltv-scraper) | [rocket-league-scraper](https://github.com/ark-daemon/rocket-league-scraper) | [lol-esports-scraper](https://github.com/ark-daemon/lol-esports-scraper)
+**Fleet:** [vlr-scraper](https://github.com/ark-daemon/vlr-scraper) · [hltv-scraper](https://github.com/ark-daemon/hltv-scraper) · [rocket-league-scraper](https://github.com/ark-daemon/rocket-league-scraper) · [lol-esports-scraper](https://github.com/ark-daemon/lol-esports-scraper)
 
----
+## Features
 
-## What it does
+- **Four sources** -- Dotabuff (browser), Liquipedia, OpenDota API, DLTV
+- **Source-tagged schema** -- rows keyed by `source` + `source_id` (not fully entity-merged)
+- **Async pipeline** -- queues, URL de-dupe, per-run page caps
+- **Parquet table export** -- pandas + pyarrow under the configured export dir
+- **Fleet snapshot** -- match-grain `export/` (`data.json` + `csv` + `parquet` + `manifest.json`)
+- **Optional R2 publish** -- overwrite-in-place upload with public manifest verification
 
-Ingests tournament structure, teams, players, series results, per-game drafts/stats, rankings, transfers, and earnings-shaped records into one schema (`source` + `source_id` keys). Prefer **OpenDota** and **Liquipedia** for stable bulk data; use Dotabuff/DLTV when you need those surfaces.
+Maturity: **beta (`0.1.0`)**. Prefer OpenDota and Liquipedia for stable bulk data; treat Dotabuff/DLTV as specialized surfaces. Not affiliated with Dotabuff, Liquipedia, OpenDota, or DLTV.
 
-Maturity: **beta (`0.1.0`)**. Multi-source identity is **not** fully reconciled into a single canonical entity graph - rows coexist with source tags. Not affiliated with Dotabuff, Liquipedia, OpenDota, or DLTV.
-
----
-
-## Architecture
-
-```
-                         seeds (per source)
-                                |
-          +---------------------+---------------------+
-          |                     |                     |
-          v                     v                     v
-   DotabuffFetcher       LiquipediaFetcher    OpenDotaFetcher / DltvFetcher
-   CloakBrowser          httpx (+ delay)      httpx (+ rate limit / tenacity)
-   fingerprint seed      BS4 / selectolax     JSON -> opendota_parser
-          |                     |                     |
-          +---------------------+---------------------+
-                                |
-                                v
-                   ScrapePipeline (async queues,
-                   max_pages_per_run cap, URL de-dupe)
-                                |
-                                v
-                   storage.Database -> SQLite WAL
-                                |
-                                v
-                   export -> Parquet (pandas + pyarrow)
-```
-
-**Resilience vocabulary (precise):**
-
-- **Per-fetcher delays** (`DOTA2_*_DELAY_SECONDS`) - spacing, not a token bucket.
-- **tenacity** retries with exponential jitter on network/5xx/429 for HTTP fetchers.
-- **No circuit breaker** (that term is reserved for vlr-scraper's global failure trip).
-- **CloakBrowser** only on the Dotabuff path (`launch_async` + `--fingerprint=`). Error text mentions `patchright install-deps chromium` if the stealth stack is incomplete.
-
-CLI `scrape all` currently runs **Dotabuff + Liquipedia** concurrently (`pipeline.scrape_all`); OpenDota and DLTV are separate commands.
-
----
-
-## Quickstart
+## Getting started
 
 ```bash
 git clone https://github.com/ark-daemon/dota2-scraper.git
@@ -65,30 +30,69 @@ python -m venv .venv
 source .venv/bin/activate
 
 pip install -e ".[dev]"
-# Dotabuff path needs CloakBrowser; first launch downloads Chromium.
-# If launch fails, install browser deps (CloakBrowser/patchright stack), e.g.:
-#   patchright install-deps chromium
-
 cp .env.example .env
 # set DOTA2_USER_AGENT with a real contact
 
 dota2-scraper --help
+```
+
+Dotabuff needs CloakBrowser (Chromium on first launch). If launch fails, install browser deps for the CloakBrowser/patchright stack (e.g. `patchright install-deps chromium`).
+
+## Usage
+
+```bash
 dota2-scraper scrape liquipedia --max-pages 20
 dota2-scraper scrape opendota
 dota2-scraper scrape dltv
 dota2-scraper scrape dotabuff --max-pages 10
+dota2-scraper scrape all                 # Dotabuff + Liquipedia concurrently
+dota2-scraper scrape backfill --year 2024
+dota2-scraper scrape backfill --all-time
 dota2-scraper status
 dota2-scraper export -o exports
+
+# Fleet match snapshot (export/)
+dota2-scraper snapshot
+dota2-scraper snapshot --publish
+dota2-scraper publish
 ```
 
-Historical helper:
+> [!NOTE]
+> CLI `scrape all` runs **Dotabuff + Liquipedia** only. OpenDota and DLTV stay separate commands.
 
-```bash
-dota2-scraper scrape backfill --year 2024
-# or: dota2-scraper scrape backfill --all-time
+Full Typer-generated CLI docs: [COMMANDS.md](COMMANDS.md).
+
+## Architecture
+
+```
+                    seeds (per source)
+                           |
+     +---------------------+---------------------+
+     |                     |                     |
+     v                     v                     v
+ DotabuffFetcher     LiquipediaFetcher    OpenDota / DLTV
+ CloakBrowser        httpx + delay        httpx + tenacity
+     |                     |                     |
+     +---------------------+---------------------+
+                           |
+                           v
+              ScrapePipeline (async queues,
+              max_pages_per_run, URL de-dupe)
+                           |
+                           v
+              storage.Database -> SQLite WAL
+                           |
+         +-----------------+-----------------+
+         v                                   v
+  export -> Parquet tables          snapshot -> export/
 ```
 
----
+**Resilience (precise vocabulary):**
+
+- Per-fetcher delays (`DOTA2_*_DELAY_SECONDS`) -- spacing, not a token bucket
+- **tenacity** retries with exponential jitter on network/5xx/429 for HTTP fetchers
+- **No circuit breaker** (that term is reserved for vlr-scraper's global failure trip)
+- CloakBrowser only on the Dotabuff path (`launch_async` + fingerprint seed)
 
 ## Configuration
 
@@ -103,7 +107,7 @@ dota2-scraper scrape backfill --year 2024
 | `DOTA2_LIQUIPEDIA_BASE_URL` | `https://liquipedia.net` | Origin |
 | `DOTA2_OPENDOTA_BASE_URL` | `https://api.opendota.com/api` | API root |
 | `DOTA2_DLTV_BASE_URL` | `https://dltv.org` | Origin |
-| `DOTA2_BROWSER_FINGERPRINT_SEED` | `42069` | CloakBrowser fingerprint arg |
+| `DOTA2_BROWSER_FINGERPRINT_SEED` | `42069` | CloakBrowser fingerprint |
 | `DOTA2_DOTABUFF_CONCURRENCY` | `2` (1-5) | Parallel Dotabuff workers |
 | `DOTA2_LIQUIPEDIA_CONCURRENCY` | `4` (1-8) | Parallel Liquipedia workers |
 | `DOTA2_DLTV_CONCURRENCY` | `1` (1-3) | Parallel DLTV workers |
@@ -114,13 +118,19 @@ dota2-scraper scrape backfill --year 2024
 | `DOTA2_MAX_PAGES_PER_RUN` | `100` | Hard cap on scheduled URLs per run |
 | `DOTA2_USER_AGENT` | research bot placeholder | httpx UA (replace contact) |
 
-Default seeds (overridable only by code/CLI URL flags, not env lists): Dotabuff `/esports`; Liquipedia tournament/team/upcoming portals.
+**R2 publish** (optional):
 
-> Note: `.env.example` must not invent knobs that `Settings` ignores.
+| Variable | Role |
+|----------|------|
+| `R2_ACCOUNT_ID` | Cloudflare account id |
+| `R2_ACCESS_KEY_ID` | R2 API token access key |
+| `R2_SECRET_ACCESS_KEY` | R2 API token secret |
+| `R2_BUCKET` | Bucket name |
+| `R2_PUBLIC_BASE_URL` | Public base, no trailing slash |
 
----
+Objects land at `{base}/dota/{data.json,data.csv,data.parquet,manifest.json}`.
 
-## Data model + sample output
+## Data model
 
 Schema: `dota2_scraper/schemas/schema.sql`.
 
@@ -130,59 +140,51 @@ Schema: `dota2_scraper/schemas/schema.sql`.
 | Matches | `matches`, `games`, `drafts`, `draft_picks`, `player_game_stats`, `game_timelines` |
 | Extra | `opendota_objectives`, `ept_rankings`, `world_rankings`, `scraper_metadata` |
 
-Most fact tables carry `source`, `source_id`, and often `raw_json` for replay/debug.
+Most fact tables carry `source`, `source_id`, and often `raw_json`.
 
-**Illustrative export shape** (Parquet columns match SQLite):
+Illustrative Parquet shape:
 
 ```text
-tournaments.parquet
-  source=liquipedia  source_id=...  name="The International 2025"  region=...  prize_pool_total=...
-
 matches.parquet
   source=liquipedia  team_a_name="Team Spirit"  team_b_name="Team Liquid"
   team_a_score=2  team_b_score=1  series_format="Bo3"  status=...
 ```
 
-CLI `export` writes **Parquet only** (not CSV/JSON).
+CLI `export` writes **Parquet only** for warehouse tables.
 
----
+### Fleet snapshot (`export/`)
 
-## Current limitations
+Match/series grain, `schema_version` **1.0**:
 
-- **`max_pages_per_run`** stops crawls early by design; raise deliberately.
-- **Cross-source IDs are not merged.** Same team may appear under multiple `source` values.
-- **Dotabuff depends on CloakBrowser** and is the most fragile/expensive path.
-- **OpenDota public rate limits** apply; no API key plumbing in Settings today.
-- **No circuit breaker** - only delays + tenacity retries.
-- **Parser coverage varies** by page type/season; missing fields become NULL.
-- **Tests** cover packaging smoke, utils, and a Liquipedia HTML fixture - not live multi-source integration.
+`match_id`, `match_date`, `team_a`, `team_b`, `winner`, `source_url`, `status`, `score_a`, `score_b`, `event_name`, `format`, `raw_status`
 
----
+> [!NOTE]
+> Snapshot `export/` is separate from table Parquet dumps (`export` command / `DOTA2_EXPORT_DIR`).
+
+## Limitations
+
+> [!WARNING]
+> Cross-source IDs are **not** merged. The same team may appear under multiple `source` values. Raise `DOTA2_MAX_PAGES_PER_RUN` deliberately -- it stops crawls early by design.
+
+- Dotabuff depends on CloakBrowser and is the most fragile/expensive path
+- OpenDota public rate limits apply; no API key plumbing in Settings today
+- No circuit breaker -- only delays + tenacity retries
+- Parser coverage varies by page type/season; missing fields become NULL
+- Tests cover packaging smoke, utils, and a Liquipedia HTML fixture -- not live multi-source integration
 
 ## Tech stack
 
-| Layer | Actually used |
-|-------|----------------|
+| Layer | Used |
+|-------|------|
 | Runtime | Python >=3.11, asyncio |
-| CLI | typer, rich |
+| CLI | typer + rich (`dota2-scraper`) |
 | Config | pydantic + pydantic-settings |
-| HTTP | httpx (HTTP/2 extra enabled in deps) |
+| HTTP | httpx (HTTP/2 extra enabled) |
 | Browser | cloakbrowser for Dotabuff only |
 | HTML | beautifulsoup4 + selectolax |
 | Retry | tenacity |
 | Storage | aiosqlite |
-| Export | pandas + pyarrow -> Parquet |
-| Logging | loguru; progress via tqdm / rich CLI chrome |
+| Export | pandas + pyarrow -> Parquet; snapshot also JSON/CSV |
+| Logging | loguru; tqdm / rich CLI chrome |
+| Publish | boto3 optional at runtime (`pip install boto3`) |
 | Quality | pytest (dev) |
-
----
-
-## License
-
-MIT (c) ark-daemon - see [LICENSE](LICENSE).
-
-See also [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md).
-
-## Command reference
-
-Full Typer-generated CLI docs: [COMMANDS.md](COMMANDS.md).
